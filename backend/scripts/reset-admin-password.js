@@ -1,14 +1,16 @@
 import dotenv from 'dotenv'
 import mongoose from 'mongoose'
 
-import { hashPassword } from '../backend/auth.js'
-import { AdminUser } from '../backend/models/AdminUser.js'
+import { hashPassword } from '../auth.js'
+import { User } from '../models/User.js'
 
 dotenv.config()
 
 const mongoUri = process.env.MONGODB_URI
 const username = (process.env.ADMIN_USERNAME || 'admin').trim().toLowerCase()
 const password = process.env.ADMIN_PASSWORD || 'admin1234'
+const email = (process.env.ADMIN_EMAIL || 'admin@floorcraft.local').trim().toLowerCase()
+const phone = String(process.env.ADMIN_PHONE || '0000000000').trim()
 
 async function resetAdminPassword() {
   if (!mongoUri) {
@@ -19,14 +21,15 @@ async function resetAdminPassword() {
 
   const passwordHash = await hashPassword(password)
 
-  const adminUser = await AdminUser.findOneAndUpdate(
+  const adminUser = await User.findOneAndUpdate(
     { username },
-    { username, passwordHash },
+    { username, email, phone, passwordHash, role: 'admin' },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   )
 
   console.log(`Admin username: ${adminUser.username}`)
-  console.log(`Admin password reset to value from .env`)
+  console.log(`Admin role: ${adminUser.role}`)
+  console.log('Admin password reset to value from .env')
 
   await mongoose.disconnect()
 }
