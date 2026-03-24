@@ -17,6 +17,8 @@ const port = process.env.PORT || 5000
 const mongoUri = process.env.MONGODB_URI
 const defaultAdminUsername = (process.env.ADMIN_USERNAME || 'admin').trim().toLowerCase()
 const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'admin1234'
+const defaultAdminEmail = (process.env.ADMIN_EMAIL || 'admin@floorcraft.local').trim().toLowerCase()
+const defaultAdminPhone = String(process.env.ADMIN_PHONE || '0000000000').trim()
 
 app.use(cors())
 app.use(express.json())
@@ -36,83 +38,65 @@ function getUnauthorizedMessage(role) {
     return { message: 'User authorization required' }
   }
 
+  if (role === 'any') {
+    return { message: 'Authorization required' }
+  }
+
   return { message: 'Admin authorization required' }
 }
 
-function createAuthMiddleware(Model, role) {
+function createAuthMiddleware(roleOrRoles) {
+  const allowedRoles = Array.isArray(roleOrRoles) ? roleOrRoles : [roleOrRoles]
+  const messageRole = allowedRoles.length === 1 ? allowedRoles[0] : 'any'
+
   return async function authMiddleware(request, response, next) {
     try {
       const token = extractBearerToken(request)
       const payload = verifyAuthToken(token)
 
-      if (!payload || payload.role !== role) {
-        response.status(401).json(getUnauthorizedMessage(role))
+      if (!payload || !allowedRoles.includes(payload.role)) {
+        response.status(401).json(getUnauthorizedMessage(messageRole))
         return
       }
 
-      const account = await Model.findById(payload.sub)
+      const account = await User.findById(payload.sub)
 
-      if (!account || account.username !== payload.username) {
-        response.status(401).json(getUnauthorizedMessage(role))
+      if (!account || account.username !== payload.username || !allowedRoles.includes(account.role)) {
+        response.status(401).json(getUnauthorizedMessage(messageRole))
         return
       }
 
-      if (role === 'admin') {
+      if (account.role === 'admin') {
         request.adminUser = account
-      } else {
-        request.user = account
       }
+
+      request.user = account
 
       next()
     } catch {
-      response.status(401).json(getUnauthorizedMessage(role))
+      response.status(401).json(getUnauthorizedMessage(messageRole))
     }
   }
 }
 
-const requireAdminAuth = createAuthMiddleware(AdminUser, 'admin')
-const requireUserAuth = createAuthMiddleware(User, 'user')
+const requireAdminAuth = createAuthMiddleware('admin')
+const requireUserAuth = createAuthMiddleware(['user', 'admin'])
+const requireAnyAuth = createAuthMiddleware(['user', 'admin'])
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, message: 'Backend is running' })
 })
 
-app.post('/api/admin/login', async (req, res) => {
-  try {
-    const username = String(req.body?.username || '')
-      .trim()
-      .toLowerCase()
-    const password = String(req.body?.password || '')
-
-    if (!username || !password) {
-      return res.status(400).json({ message: 'Username and password are required' })
-    }
-
-    const adminUser = await AdminUser.findOne({ username })
-
-    if (!adminUser) {
-      return res.status(401).json({ message: 'Invalid username or password' })
-    }
-
-    const passwordMatches = await verifyPassword(password, adminUser.passwordHash)
-
-    if (!passwordMatches) {
-      return res.status(401).json({ message: 'Invalid username or password' })
-    }
-
-    return res.json({
-      token: createAuthToken(adminUser, 'admin'),
-      user: {
-        id: adminUser._id,
-        username: adminUser.username,
-      },
-    })
-  } catch (error) {
-    return res.status(500).json({
-      message: 'Login failed',
-      details: error instanceof Error ? error.message : 'Unknown error',
-    })
-  }
+app.get('/api/auth/me', requireAnyAuth, (req, res) => {
+  res.json({
+    user: {
+      id: req.user._id,
+      email: req.user.email,
+      phone: req.user.phone,
+      username: req.user.username,
+      role: req.user.role,
+    },
+  })
 })
 
 app.get('/api/admin/me', requireAdminAuth, (req, res) => {
@@ -120,6 +104,7 @@ app.get('/api/admin/me', requireAdminAuth, (req, res) => {
     user: {
       id: req.adminUser._id,
       username: req.adminUser.username,
+      role: req.adminUser.role,
     },
   })
 })
@@ -190,6 +175,7 @@ app.post('/api/users/register', async (req, res) => {
       phone,
       username,
       passwordHash: await hashPassword(password),
+      role: 'user',
     })
 
     return res.status(201).json({
@@ -199,6 +185,7 @@ app.post('/api/users/register', async (req, res) => {
         email: user.email,
         phone: user.phone,
         username: user.username,
+        role: user.role,
       },
     })
   } catch (error) {
@@ -235,12 +222,13 @@ app.post('/api/users/login', async (req, res) => {
     }
 
     return res.json({
-      token: createAuthToken(user, 'user'),
+      token: createAuthToken(user, user.role),
       user: {
         id: user._id,
         email: user.email,
         phone: user.phone,
         username: user.username,
+        role: user.role,
       },
     })
   } catch (error) {
@@ -258,8 +246,59 @@ app.get('/api/users/me', requireUserAuth, (req, res) => {
       email: req.user.email,
       phone: req.user.phone,
       username: req.user.username,
+      role: req.user.role,
     },
   })
+})
+
+app.get('/api/admin/users', requireAdminAuth, async (_req, res) => {
+  try {
+    const users = await User.find()
+      .select('_id email phone username role createdAt updatedAt')
+      .sort({ createdAt: -1, username: 1 })
+
+    return res.json(users)
+  } catch {
+    return res.status(500).json({ message: 'Failed to load users' })
+  }
+})
+
+app.patch('/api/admin/users/:id/role', requireAdminAuth, async (req, res) => {
+  try {
+    const role = String(req.body?.role || '').trim()
+
+    if (!['admin', 'user'].includes(role)) {
+      return res.status(400).json({ message: 'Role must be admin or user' })
+    }
+
+    const targetUser = await User.findById(req.params.id)
+
+    if (!targetUser) {
+      return res.status(404).json({ message: 'User not found' })
+    }
+
+    if (String(targetUser._id) === String(req.adminUser._id) && role !== 'admin') {
+      return res.status(400).json({ message: 'You cannot remove your own admin role' })
+    }
+
+    targetUser.role = role
+    await targetUser.save()
+
+    return res.json({
+      id: targetUser._id,
+      email: targetUser.email,
+      phone: targetUser.phone,
+      username: targetUser.username,
+      role: targetUser.role,
+      createdAt: targetUser.createdAt,
+      updatedAt: targetUser.updatedAt,
+    })
+  } catch (error) {
+    return res.status(400).json({
+      message: 'Failed to update user role',
+      details: error instanceof Error ? error.message : 'Unknown error',
+    })
+  }
 })
 
 app.get('/api/projects', async (_req, res) => {
@@ -271,9 +310,30 @@ app.get('/api/projects', async (_req, res) => {
   }
 })
 
+async function ensureFeaturedProjectLimit(isFeatured, excludeId = '') {
+  if (!isFeatured) {
+    return
+  }
+
+  const filter = excludeId
+    ? { featured: true, _id: { $ne: excludeId } }
+    : { featured: true }
+
+  const featuredCount = await Project.countDocuments(filter)
+
+  if (featuredCount >= 3) {
+    throw new Error('You can only mark up to 3 featured projects')
+  }
+}
+
 app.post('/api/projects', requireAdminAuth, async (req, res) => {
   try {
-    const project = await Project.create(req.body)
+    await ensureFeaturedProjectLimit(Boolean(req.body?.featured))
+
+    const project = await Project.create({
+      ...req.body,
+      featured: Boolean(req.body?.featured),
+    })
     res.status(201).json(project)
   } catch (error) {
     res.status(400).json({
@@ -285,7 +345,12 @@ app.post('/api/projects', requireAdminAuth, async (req, res) => {
 
 app.put('/api/projects/:id', requireAdminAuth, async (req, res) => {
   try {
-    const project = await Project.findByIdAndUpdate(req.params.id, req.body, {
+    await ensureFeaturedProjectLimit(Boolean(req.body?.featured), req.params.id)
+
+    const project = await Project.findByIdAndUpdate(req.params.id, {
+      ...req.body,
+      featured: Boolean(req.body?.featured),
+    }, {
       new: true,
       runValidators: true,
     })
@@ -365,6 +430,32 @@ app.post('/api/reviews', requireUserAuth, async (req, res) => {
   }
 })
 
+async function deleteOwnedReview(req, res) {
+  try {
+    const review = await Review.findById(req.params.id)
+
+    if (!review) {
+      return res.status(404).json({ message: 'Review not found' })
+    }
+
+    if (String(review.userId) !== String(req.user._id)) {
+      return res.status(403).json({ message: 'You can only delete your own reviews' })
+    }
+
+    await review.deleteOne()
+
+    return res.json({ ok: true })
+  } catch (error) {
+    return res.status(400).json({
+      message: 'Failed to delete review',
+      details: error instanceof Error ? error.message : 'Unknown error',
+    })
+  }
+}
+
+app.delete('/api/reviews/:id', requireUserAuth, deleteOwnedReview)
+app.post('/api/reviews/:id/delete', requireUserAuth, deleteOwnedReview)
+
 async function seedCollection(Model, sampleData) {
   const total = await Model.countDocuments()
 
@@ -376,21 +467,45 @@ async function seedCollection(Model, sampleData) {
 async function ensureCollections() {
   await Promise.all([
     Project.createCollection().catch(() => null),
-    AdminUser.createCollection().catch(() => null),
     User.createCollection().catch(() => null),
     Review.createCollection().catch(() => null),
   ])
 
   await Promise.all([
     Project.syncIndexes(),
-    AdminUser.syncIndexes(),
     User.syncIndexes(),
     Review.syncIndexes(),
   ])
 }
 
+async function migrateLegacyAdminUsers() {
+  const legacyAdmins = await AdminUser.find().lean()
+
+  for (const legacyAdmin of legacyAdmins) {
+    const existingUser = await User.findOne({ username: legacyAdmin.username })
+
+    if (existingUser) {
+      if (existingUser.role !== 'admin') {
+        existingUser.role = 'admin'
+        await existingUser.save()
+      }
+      continue
+    }
+
+    await User.create({
+      email: `${legacyAdmin.username}@floorcraft.local`,
+      phone: `legacy-${String(legacyAdmin._id).slice(-10)}`,
+      username: legacyAdmin.username,
+      passwordHash: legacyAdmin.passwordHash,
+      role: 'admin',
+      createdAt: legacyAdmin.createdAt,
+      updatedAt: legacyAdmin.updatedAt,
+    })
+  }
+}
+
 async function ensureDefaultAdminUser() {
-  const totalAdmins = await AdminUser.countDocuments()
+  const totalAdmins = await User.countDocuments({ role: 'admin' })
 
   if (totalAdmins > 0) {
     return
@@ -398,9 +513,12 @@ async function ensureDefaultAdminUser() {
 
   const passwordHash = await hashPassword(defaultAdminPassword)
 
-  await AdminUser.create({
+  await User.create({
+    email: defaultAdminEmail,
+    phone: defaultAdminPhone,
     username: defaultAdminUsername,
     passwordHash,
+    role: 'admin',
   })
 }
 
@@ -411,6 +529,7 @@ async function startServer() {
 
   await mongoose.connect(mongoUri)
   await ensureCollections()
+  await migrateLegacyAdminUsers()
   await ensureDefaultAdminUser()
   await seedCollection(Project, sampleProjects)
 
@@ -425,3 +544,5 @@ startServer().catch((error) => {
   console.error('Failed to start server:', error.message)
   process.exit(1)
 })
+
+export { app }

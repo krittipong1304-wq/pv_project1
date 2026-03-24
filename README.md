@@ -30,11 +30,15 @@ VITE_API_URL=http://localhost:5000
 
 ## Run the app
 
+Before starting the backend, make sure MongoDB is running locally on `127.0.0.1:27017`.
+
 Start backend:
 
 ```bash
 npm run dev:backend
 ```
+
+Note: on some macOS setups, Node's native `--watch` mode can fail with `EMFILE`, so the backend dev script runs without file watching for reliability.
 
 Start frontend in another terminal:
 
@@ -43,6 +47,25 @@ npm run dev:frontend
 ```
 
 Vite now uses `frontend/` as its app root, so the separation is physical as well as logical.
+
+## macOS helpers
+
+This repo includes Windows `.bat` launchers and macOS/Linux shell launchers:
+
+- `./start-backend.sh`
+- `./start-frontend.sh`
+- `./start-app.sh`
+
+For macOS Finder, you can also use:
+
+- `./start-backend.command`
+- `./start-frontend.command`
+- `./start-app.command`
+
+If the backend does not start, check these two common causes first:
+
+1. `.env` is missing
+2. MongoDB is not running locally
 
 ## Available API endpoints
 

@@ -19,7 +19,7 @@ function signValue(value) {
   return crypto.createHmac('sha256', getAuthSecret()).update(value).digest('base64url')
 }
 
-export function createAuthToken(account, role = 'admin') {
+export function createAuthToken(account, role = account.role || 'user') {
   const payload = {
     sub: account._id.toString(),
     username: account.username,
