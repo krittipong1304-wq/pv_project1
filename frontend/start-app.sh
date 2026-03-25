@@ -2,10 +2,13 @@
 
 cd "$(dirname "$0")" || exit 1
 
-npm run dev:backend &
+(
+  cd ../backend || exit 1
+  npm run dev
+) &
 BACKEND_PID=$!
 
-npm run dev:frontend &
+npm run dev &
 FRONTEND_PID=$!
 
 cleanup() {
