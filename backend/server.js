@@ -1,16 +1,27 @@
 import cors from 'cors'
 import dotenv from 'dotenv'
 import express from 'express'
+import { existsSync } from 'fs'
 import mongoose from 'mongoose'
+import { resolve } from 'path'
 
 import { createAuthToken, hashPassword, verifyAuthToken, verifyPassword } from './auth.js'
 import { sampleProjects } from './data/sampleProjects.js'
-import { AdminUser } from './models/AdminUser.js'
 import { Project } from './models/Project.js'
+import { Role } from './models/Role.js'
 import { Review } from './models/Review.js'
 import { User } from './models/User.js'
 
-dotenv.config()
+const envPaths = [
+  resolve(process.cwd(), '.env'),
+  resolve(process.cwd(), 'backend/.env'),
+]
+
+for (const envPath of envPaths) {
+  if (existsSync(envPath)) {
+    dotenv.config({ path: envPath })
+  }
+}
 
 const app = express()
 const port = process.env.PORT || 5000
@@ -19,9 +30,38 @@ const defaultAdminUsername = (process.env.ADMIN_USERNAME || 'admin').trim().toLo
 const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'admin1234'
 const defaultAdminEmail = (process.env.ADMIN_EMAIL || 'admin@floorcraft.local').trim().toLowerCase()
 const defaultAdminPhone = String(process.env.ADMIN_PHONE || '0000000000').trim()
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${PORT}`);
+});
 
 app.use(cors())
 app.use(express.json())
+
+function getRoleName(role) {
+  if (!role) {
+    return ''
+  }
+
+  if (typeof role === 'string') {
+    return role
+  }
+
+  return role.name || ''
+}
+
+function serializeUser(user) {
+  return {
+    id: user._id,
+    email: user.email,
+    phone: user.phone,
+    username: user.username,
+    role: getRoleName(user.role),
+  }
+}
+
+async function findRoleByName(name) {
+  return Role.findOne({ name: String(name || '').trim().toLowerCase() })
+}
 
 function extractBearerToken(request) {
   const authHeader = request.headers.authorization || ''
@@ -59,14 +99,15 @@ function createAuthMiddleware(roleOrRoles) {
         return
       }
 
-      const account = await User.findById(payload.sub)
+      const account = await User.findById(payload.sub).populate('role')
+      const accountRole = getRoleName(account?.role)
 
-      if (!account || account.username !== payload.username || !allowedRoles.includes(account.role)) {
+      if (!account || account.username !== payload.username || !allowedRoles.includes(accountRole)) {
         response.status(401).json(getUnauthorizedMessage(messageRole))
         return
       }
 
-      if (account.role === 'admin') {
+      if (accountRole === 'admin') {
         request.adminUser = account
       }
 
@@ -89,23 +130,13 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/auth/me', requireAnyAuth, (req, res) => {
   res.json({
-    user: {
-      id: req.user._id,
-      email: req.user.email,
-      phone: req.user.phone,
-      username: req.user.username,
-      role: req.user.role,
-    },
+    user: serializeUser(req.user),
   })
 })
 
 app.get('/api/admin/me', requireAdminAuth, (req, res) => {
   res.json({
-    user: {
-      id: req.adminUser._id,
-      username: req.adminUser.username,
-      role: req.adminUser.role,
-    },
+    user: serializeUser(req.adminUser),
   })
 })
 
@@ -175,18 +206,12 @@ app.post('/api/users/register', async (req, res) => {
       phone,
       username,
       passwordHash: await hashPassword(password),
-      role: 'user',
+      role: (await findRoleByName('user'))._id,
     })
 
     return res.status(201).json({
       token: createAuthToken(user, 'user'),
-      user: {
-        id: user._id,
-        email: user.email,
-        phone: user.phone,
-        username: user.username,
-        role: user.role,
-      },
+      user: serializeUser({ ...user.toObject(), role: { name: 'user' } }),
     })
   } catch (error) {
     return res.status(500).json({
@@ -209,7 +234,7 @@ app.post('/api/users/login', async (req, res) => {
 
     const user = await User.findOne({
       $or: [{ email: login }, { username: login }],
-    })
+    }).populate('role')
 
     if (!user) {
       return res.status(401).json({ message: 'Invalid username/email or password' })
@@ -221,15 +246,11 @@ app.post('/api/users/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid username/email or password' })
     }
 
+    const roleName = getRoleName(user.role)
+
     return res.json({
-      token: createAuthToken(user, user.role),
-      user: {
-        id: user._id,
-        email: user.email,
-        phone: user.phone,
-        username: user.username,
-        role: user.role,
-      },
+      token: createAuthToken(user, roleName),
+      user: serializeUser(user),
     })
   } catch (error) {
     return res.status(500).json({
@@ -241,23 +262,23 @@ app.post('/api/users/login', async (req, res) => {
 
 app.get('/api/users/me', requireUserAuth, (req, res) => {
   res.json({
-    user: {
-      id: req.user._id,
-      email: req.user.email,
-      phone: req.user.phone,
-      username: req.user.username,
-      role: req.user.role,
-    },
+    user: serializeUser(req.user),
   })
 })
 
 app.get('/api/admin/users', requireAdminAuth, async (_req, res) => {
   try {
     const users = await User.find()
-      .select('_id email phone username role createdAt updatedAt')
+      .populate('role')
       .sort({ createdAt: -1, username: 1 })
 
-    return res.json(users)
+    return res.json(
+      users.map((user) => ({
+        ...serializeUser(user),
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      })),
+    )
   } catch {
     return res.status(500).json({ message: 'Failed to load users' })
   }
@@ -265,31 +286,33 @@ app.get('/api/admin/users', requireAdminAuth, async (_req, res) => {
 
 app.patch('/api/admin/users/:id/role', requireAdminAuth, async (req, res) => {
   try {
-    const role = String(req.body?.role || '').trim()
+    const roleName = String(req.body?.role || '')
+      .trim()
+      .toLowerCase()
 
-    if (!['admin', 'user'].includes(role)) {
+    if (!['admin', 'user'].includes(roleName)) {
       return res.status(400).json({ message: 'Role must be admin or user' })
     }
 
-    const targetUser = await User.findById(req.params.id)
+    const [targetUser, role] = await Promise.all([
+      User.findById(req.params.id).populate('role'),
+      findRoleByName(roleName),
+    ])
 
-    if (!targetUser) {
+    if (!targetUser || !role) {
       return res.status(404).json({ message: 'User not found' })
     }
 
-    if (String(targetUser._id) === String(req.adminUser._id) && role !== 'admin') {
+    if (String(targetUser._id) === String(req.adminUser._id) && roleName !== 'admin') {
       return res.status(400).json({ message: 'You cannot remove your own admin role' })
     }
 
-    targetUser.role = role
+    targetUser.role = role._id
     await targetUser.save()
+    await targetUser.populate('role')
 
     return res.json({
-      id: targetUser._id,
-      email: targetUser.email,
-      phone: targetUser.phone,
-      username: targetUser.username,
-      role: targetUser.role,
+      ...serializeUser(targetUser),
       createdAt: targetUser.createdAt,
       updatedAt: targetUser.updatedAt,
     })
@@ -467,26 +490,54 @@ async function seedCollection(Model, sampleData) {
 async function ensureCollections() {
   await Promise.all([
     Project.createCollection().catch(() => null),
+    Role.createCollection().catch(() => null),
     User.createCollection().catch(() => null),
     Review.createCollection().catch(() => null),
   ])
 
   await Promise.all([
     Project.syncIndexes(),
+    Role.syncIndexes(),
     User.syncIndexes(),
     Review.syncIndexes(),
   ])
 }
 
+async function ensureBaseRoles() {
+  const roles = [
+    { name: 'admin', label: 'Administrator' },
+    { name: 'user', label: 'User' },
+  ]
+
+  for (const role of roles) {
+    await Role.findOneAndUpdate(
+      { name: role.name },
+      role,
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    )
+  }
+}
+
 async function migrateLegacyAdminUsers() {
-  const legacyAdmins = await AdminUser.find().lean()
+  const adminRole = await findRoleByName('admin')
+  const legacyAdminCollection = mongoose.connection.db.collection('adminusers')
+  const hasLegacyAdminCollection = await legacyAdminCollection
+    .countDocuments({}, { limit: 1 })
+    .then(() => true)
+    .catch(() => false)
+
+  if (!hasLegacyAdminCollection) {
+    return
+  }
+
+  const legacyAdmins = await legacyAdminCollection.find({}).toArray()
 
   for (const legacyAdmin of legacyAdmins) {
-    const existingUser = await User.findOne({ username: legacyAdmin.username })
+    const existingUser = await User.findOne({ username: legacyAdmin.username }).populate('role')
 
     if (existingUser) {
-      if (existingUser.role !== 'admin') {
-        existingUser.role = 'admin'
+      if (getRoleName(existingUser.role) !== 'admin') {
+        existingUser.role = adminRole._id
         await existingUser.save()
       }
       continue
@@ -497,15 +548,30 @@ async function migrateLegacyAdminUsers() {
       phone: `legacy-${String(legacyAdmin._id).slice(-10)}`,
       username: legacyAdmin.username,
       passwordHash: legacyAdmin.passwordHash,
-      role: 'admin',
+      role: adminRole._id,
       createdAt: legacyAdmin.createdAt,
       updatedAt: legacyAdmin.updatedAt,
     })
   }
 }
 
+async function migrateUsersToRoleCollection() {
+  const adminRole = await findRoleByName('admin')
+  const userRole = await findRoleByName('user')
+
+  await Promise.all([
+    User.collection.updateMany({ role: 'admin' }, { $set: { role: adminRole._id } }),
+    User.collection.updateMany({ role: 'user' }, { $set: { role: userRole._id } }),
+    User.collection.updateMany(
+      { $or: [{ role: { $exists: false } }, { role: null }, { role: '' }] },
+      { $set: { role: userRole._id } },
+    ),
+  ])
+}
+
 async function ensureDefaultAdminUser() {
-  const totalAdmins = await User.countDocuments({ role: 'admin' })
+  const adminRole = await findRoleByName('admin')
+  const totalAdmins = await User.countDocuments({ role: adminRole._id })
 
   if (totalAdmins > 0) {
     return
@@ -518,8 +584,21 @@ async function ensureDefaultAdminUser() {
     phone: defaultAdminPhone,
     username: defaultAdminUsername,
     passwordHash,
-    role: 'admin',
+    role: adminRole._id,
   })
+}
+
+async function cleanupLegacyCeoData() {
+  const ceoRole = await findRoleByName('ceo')
+  const adminRole = await findRoleByName('admin')
+
+  await User.collection.updateMany({ role: 'ceo' }, { $set: { role: adminRole._id } })
+
+  if (ceoRole) {
+    await User.updateMany({ role: ceoRole._id }, { $set: { role: adminRole._id } })
+    await User.deleteMany({ username: 'ceo' })
+    await Role.deleteOne({ _id: ceoRole._id })
+  }
 }
 
 async function startServer() {
@@ -529,7 +608,10 @@ async function startServer() {
 
   await mongoose.connect(mongoUri)
   await ensureCollections()
+  await ensureBaseRoles()
   await migrateLegacyAdminUsers()
+  await migrateUsersToRoleCollection()
+  await cleanupLegacyCeoData()
   await ensureDefaultAdminUser()
   await seedCollection(Project, sampleProjects)
 

@@ -1,17 +1,18 @@
 import mongoose from 'mongoose'
 
-const adminUserSchema = new mongoose.Schema(
+const roleSchema = new mongoose.Schema(
   {
-    username: {
+    name: {
       type: String,
       required: true,
       trim: true,
       lowercase: true,
       unique: true,
     },
-    passwordHash: {
+    label: {
       type: String,
       required: true,
+      trim: true,
     },
   },
   {
@@ -19,4 +20,4 @@ const adminUserSchema = new mongoose.Schema(
   },
 )
 
-export const AdminUser = mongoose.model('AdminUser', adminUserSchema)
+export const Role = mongoose.model('Role', roleSchema)

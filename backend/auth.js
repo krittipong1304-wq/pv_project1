@@ -20,10 +20,11 @@ function signValue(value) {
 }
 
 export function createAuthToken(account, role = account.role || 'user') {
+  const resolvedRole = typeof role === 'string' ? role : role?.name || 'user'
   const payload = {
     sub: account._id.toString(),
     username: account.username,
-    role,
+    role: resolvedRole,
     exp: Date.now() + TOKEN_TTL_MS,
   }
 

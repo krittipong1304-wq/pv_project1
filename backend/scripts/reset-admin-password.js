@@ -1,10 +1,22 @@
 import dotenv from 'dotenv'
+import { existsSync } from 'fs'
 import mongoose from 'mongoose'
+import { resolve } from 'path'
 
 import { hashPassword } from '../auth.js'
+import { Role } from '../models/Role.js'
 import { User } from '../models/User.js'
 
-dotenv.config()
+const envPaths = [
+  resolve(process.cwd(), '.env'),
+  resolve(process.cwd(), 'backend/.env'),
+]
+
+for (const envPath of envPaths) {
+  if (existsSync(envPath)) {
+    dotenv.config({ path: envPath })
+  }
+}
 
 const mongoUri = process.env.MONGODB_URI
 const username = (process.env.ADMIN_USERNAME || 'admin').trim().toLowerCase()
@@ -19,16 +31,22 @@ async function resetAdminPassword() {
 
   await mongoose.connect(mongoUri)
 
+  const adminRole = await Role.findOneAndUpdate(
+    { name: 'admin' },
+    { name: 'admin', label: 'Administrator' },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  )
+
   const passwordHash = await hashPassword(password)
 
   const adminUser = await User.findOneAndUpdate(
     { username },
-    { username, email, phone, passwordHash, role: 'admin' },
+    { username, email, phone, passwordHash, role: adminRole._id },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   )
 
   console.log(`Admin username: ${adminUser.username}`)
-  console.log(`Admin role: ${adminUser.role}`)
+  console.log(`Admin role: ${adminRole.name}`)
   console.log('Admin password reset to value from .env')
 
   await mongoose.disconnect()
