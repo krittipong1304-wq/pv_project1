@@ -62,7 +62,7 @@ function serializeUser(user) {
 
 async function findRoleByName(name) {
   return Role.findOne({ name: String(name || '').trim().toLowerCase() })
-}
+ƒ}
 
 function extractBearerToken(request) {
   const authHeader = request.headers.authorization || ''
