@@ -465,9 +465,16 @@ function AdminPage(props) {
                 <label>พื้นที่<input name="area" type="number" min="1" value={projectForm.area} onChange={onProjectChange} required /></label>
                 <label>สถานที่<input name="location" value={projectForm.location} onChange={onProjectChange} required /></label>
                 <label>วันที่ติดตั้ง<input name="installedAt" type="date" value={projectForm.installedAt} onChange={onProjectChange} required /></label>
-                <label className="project-checkbox">
+                <label className={`project-checkbox ${projectForm.featured ? 'is-checked' : ''}`}>
                   <input name="featured" type="checkbox" checked={Boolean(projectForm.featured)} onChange={onProjectChange} />
-                  <span>ตั้งเป็นผลงานเด่นบน dashboard (ได้สูงสุด 3 รายการ, ตอนนี้ {featuredProjectsCount}/3)</span>
+                  <span className="project-checkbox-indicator" aria-hidden="true">
+                    <span className="project-checkbox-knob" />
+                  </span>
+                  <span className="project-checkbox-copy">
+                    <strong>ผลงานเด่นบนหน้า Dashboard</strong>
+                    <span>ใช้สำหรับโปรโมตผลงานที่อยากให้แสดงหน้าแรกได้สูงสุด 3 รายการ</span>
+                  </span>
+                  <span className="project-checkbox-count">{projectForm.featured ? 'เลือกแล้ว' : `${featuredProjectsCount}/3`}</span>
                 </label>
                 <label className="full-width">รายละเอียด<textarea name="description" rows="4" value={projectForm.description} onChange={onProjectChange} required /></label>
                 <div className="form-actions full-width"><button className="btn-primary" type="submit" disabled={submittingProject}>{submittingProject ? 'กำลังบันทึก...' : editingProjectId ? 'อัปเดตผลงาน' : 'เพิ่มผลงาน'}</button></div>

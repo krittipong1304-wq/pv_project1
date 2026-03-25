@@ -30,9 +30,10 @@ const defaultAdminUsername = (process.env.ADMIN_USERNAME || 'admin').trim().toLo
 const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'admin1234'
 const defaultAdminEmail = (process.env.ADMIN_EMAIL || 'admin@floorcraft.local').trim().toLowerCase()
 const defaultAdminPhone = String(process.env.ADMIN_PHONE || '0000000000').trim()
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
-});
+
+app.listen(port, "0.0.0.0", () => {
+  console.log(`API server running on port ${port}`)
+})
 
 app.use(cors())
 app.use(express.json())
